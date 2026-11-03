@@ -1,0 +1,206 @@
+---
+title: "Simulate It: Bootstrap CIs and p-Values Without the Black Box"
+author: "Yuchen Chen"
+date: "2026-11-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(plotly)
+library(dplyr)
+```
+## Question and Motivation
+Confidence interval and p-value is very common in statistical economics, but for most people it is a black box, the software output says "95% CI is" or "p is", and we move on. But what does 95% confidence mean actually? Why a small p-value can be regarded as the evidence to reject the null hypothesis? This post would use simulation to answer how the bootstrap CI is constructed, does a 95% CI really contains the true parameter for about 95% of the time, and how do rejection region and p-value generate form the null distribution of a test statistic.
+
+## A Note on Simulation
+This blog does not use true data, since the population and samples themselves are from simulation. I used a right-skewed population and its true mean is known.
+
+```{r}
+set.seed(2026
+)
+pop <- rlnorm(
+50000, meanlog = 0.55, sdlog = 0.7
+)
+true_mean <- mean(pop)
+```
+
+## Constructing a Bootstrap Confidence Interval
+Suppose we can only abserve a sample that contains 40 values, and want to estimate the unknown population mean, then the sample mean is our best guess. But a single number cannot say how uncertain it is. The bootstrap method can only use this single sample to measure this uncertainty with the following steps:
+1. Treat the observed sample as a small population.
+2. Resample with replacement from it repeatedly, each time draw the same number of ovservations with the original.
+3. Calculate the average of each resample, these means construct the bootstrap distribution.
+4. Cut off the middle 95% of this distribution to construct the 95% confidence interval.
+
+```{r}
+set.seed(123)
+n <- 40
+sample_obs <- sample(pop, size = n)
+B <- 2000
+boot_means <- replicate(B, mean(sample(sample_obs, size = n, replace = TRUE)))
+boot_ci <- unname(quantile(boot_means, probs = c(0.025, 0.975)))
+boot_df <- data.frame(boot_mean = boot_means)
+
+ggplot(boot_df, aes(x = boot_mean)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 40, fill = "#4C72B0",
+                 color = "white") +
+  geom_vline(xintercept = boot_ci[1], color = "#C44E52", linetype = "dashed",
+             linewidth = 1) +
+  geom_vline(xintercept = boot_ci[2], color = "#C44E52", linetype = "dashed",
+             linewidth = 1) +
+  geom_vline(xintercept = true_mean, color = "#55A868", linewidth = 1.2) +
+  annotate("text", x = boot_ci[1], y = 0, label = "2.5th pct", hjust = 1.1,
+           vjust = -0.3, color = "#C44E52") +
+  annotate("text", x = boot_ci[2], y = 0, label = "97.5th pct", hjust = -0.1,
+           vjust = -0.3, color = "#C44E52") +
+  labs(title = "Bootstrap Distribution of the Sample Mean (n = 40, 2000 resamples)",
+       x = "Bootstrap sample mean", y = "Density") +
+  theme_bw()
+
+```
+
+The red dashed lines marks the 2.5 and 97.5 percentile of the bootstrap distribution, the green line marks the true population mean. The critical point is that the width of the confidence interval is from how much the resampled means spread out, which is our uncertainty about the sample mean.
+
+## Does sample size change the interval?
+With a bigger sample size, the means cluster more tightly and the interval is narrower. The following interactive plot shows how the bootstrap distribution change.
+
+```{r}
+n_levels <- c(20, 40, 80, 160)
+B <- 2000
+set.seed(99)
+interactive_dat <- lapply(seq_along(n_levels), function(k) {
+  n <- n_levels[k]
+  s <- sample(pop, size = n)
+  b <- replicate(B, mean(sample(s, size = n, replace = TRUE)))
+  ci <- unname(quantile(b, probs = c(0.025, 0.975)))
+  data.frame(n_label = paste0("n = ", n), value = b, lo = ci[1], hi = ci[2])
+})
+names(interactive_dat) <- paste0("n", n_levels)
+
+# pre-compute per-level histograms for the dropdown
+hist_by_n <- lapply(seq_along(n_levels), function(k) {
+  d <- interactive_dat[[k]]
+  hist(d$value, breaks = 40, plot = FALSE)
+})
+
+fig_boot <- plot_ly()
+for (k in seq_along(n_levels)) {
+  d <- interactive_dat[[k]]
+  h <- hist_by_n[[k]]
+  fig_boot <- fig_boot |>
+    add_trace(x = d$value, type = "histogram",
+              histnorm = "probability density", nbinsx = 40,
+              marker = list(color = "#4C72B0"),
+              name = n_levels[k], visible = (k == 1)) |>
+    add_trace(type = "scatter", mode = "lines", x = rep(d$lo[1], 2),
+              y = c(0, 1.02 * max(h$density)),
+              line = list(color = "#C44E52", dash = "dash", width = 3),
+              showlegend = FALSE, visible = (k == 1)) |>
+    add_trace(type = "scatter", mode = "lines", x = rep(d$hi[1], 2),
+              y = c(0, 1.02 * max(h$density)),
+              line = list(color = "#C44E52", dash = "dash", width = 3),
+              showlegend = FALSE, visible = (k == 1))
+}
+fig_boot |>
+  layout(title = "Bootstrap Distribution by Sample Size (dropdown)",
+         xaxis = list(title = "Bootstrap sample mean"),
+         yaxis = list(title = "Density"),
+         updatemenus = list(
+           list(
+             y = 1.15,
+             buttons = lapply(seq_along(n_levels), function(k) {
+               list(method = "restyle",
+                    label = paste0("n = ", n_levels[k]),
+                    args = list("visible", {
+                      vis <- rep(FALSE, 3 * length(n_levels))
+                      idx <- ((k - 1) * 3 + 1):(k * 3)
+                      vis[idx] <- TRUE
+                      vis
+                    }))
+             })
+           )
+         )
+  ) %>%
+  config(displayModeBar = FALSE)
+
+```
+
+The pattern shown by the plot above is consistent with the predicted theory that the confidence interval is narrower when the sample is larger, because each bootstrap distribution is tighter around sample mean.
+
+## Does a 95% Confidence Interval Really Cover the Truth 95% of the Time?
+A 95% confidence interval has a meaning that is always misunderstood: if repeating a procedure for many times, about 95% of the interval would contains the true parameter, which is not the statement that the probability that the true value is in this specific region is 95%. We would repeat drawing a new sample with a size of 100 and construct a 95% confidence interval, and record if the interval contains true mean or not. The share of containing the true mean is the coverage.
+
+```{r}
+set.seed(1)
+nsim <- 300
+n_cov <- 100
+cover_res <- lapply(seq_len(nsim), function(i) {
+  s <- sample(pop, size = n_cov)
+  ci <- t.test(s)$conf.int
+  data.frame(iter = i, low = ci[1], high = ci[2],
+             cover = (ci[1] <= true_mean) & (ci[2] >= true_mean))
+})
+cover_df <- bind_rows(cover_res)
+coverage <- mean(cover_df$cover)
+
+# ggplot the first 60 intervals, colored by whether they cover the true mean
+plot_df <- cover_df |> head(60)
+
+ggplot(plot_df, aes(x = iter, ymin = low, ymax = high, color = cover)) +
+  geom_hline(yintercept = true_mean, color = "#55A868", linewidth = 1) +
+  geom_errorbar(width = 0.6, alpha = 0.9) +
+  scale_color_manual(values = c("FALSE" = "#C44E52", "TRUE" = "#55A868"),
+                     name = "Interval covers true mean?") +
+  labs(title = paste0("95% confidence intervals for the mean across repeated samples (first 60 of ",
+                      nsim, ")"),
+       subtitle = paste0("True mean = ", round(true_mean, 2),
+                         "  |  overall coverage = ", round(coverage, 3)),
+       x = "Simulation index", y = "Interval (low / high)") +
+  theme_bw()
+
+```
+
+In the 300 simulated samples, the interval has 95.3% of the time that contains the true mean, almost consistent with 95%. Since coverage itself is a random estimation, every time the exact number would float around 0.95. The figure shows the first 60 intervals as vertical line segments, the green intervals contains true mean while the red ones do not, and the red are much less than green. This makes thefrequentist definition of the confidence concrete. The statistical process is caibrated, even though each single interval is either right or wrong.
+
+## Hypothesis Testing and p-Values by Simulation
+Considering the null hypothesis H0: mu = mu0 that the population mean is equal to some value. Under H0, we can simulate the null distribution of the test statistic using t-test.by generating many dataset from the population with a mean of mu0, and calculate the statistic each time. This tell us if H0 is true what the statistic would look like.
+
+```{r}
+set.seed(7)
+mu0 <- 0
+sigma0 <- 1
+n_ht <- 30
+null_t <- replicate(5000, {
+  x <- rnorm(n_ht, mean = mu0, sd = sigma0)
+  (mean(x) - mu0) / (sd(x) / sqrt(n_ht))
+})
+crit <- qt(0.975, df = n_ht - 1)
+null_df <- data.frame(t = null_t)
+
+# observed statistic (from data drawn with a true mean different from H0)
+set.seed(7)
+obs_t <- 2.05
+pval_sim <- mean(abs(null_t) > abs(obs_t))
+
+ggplot(null_df, aes(x = t)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 40,
+                 fill = "#4C72B0", color = "white") +
+  stat_function(fun = function(x) dt(x, df = n_ht - 1),
+                color = "#4C72B0", linewidth = 1) +
+  geom_vline(xintercept = c(-crit, crit), color = "#C44E52", linetype = "dashed",
+             linewidth = 1) +
+  geom_vline(xintercept = c(-obs_t, obs_t), color = "#55A868", linewidth = 1) +
+  labs(title = "Null distribution of the t-statistic (H0: mean = 0)",
+       subtitle = paste0("Red dashed = rejection region (±", round(crit, 2),
+                         "); green lines = observed t = ", obs_t,
+                         " | simulated p-value = ", round(pval_sim, 3)),
+       x = "t-statistic under the null", y = "Density") +
+  theme_bw()
+
+```
+
+The histogram is the distribution of the null hypothesis. If H0 is true, t-statistic would typically take these values. We choose the significant level that alpha is 0.05 and put the rejection region at the both sides of the null hypothesis, here is ±2.05, the 5% tails. If the observered statistic fall in these tails we reject H0. The p-value is the proportionof the null hypothesis distribution has a value at least as extreme as the observed statistics, here is 0.047, the area beyond the green lines. It is not the probability that H0 is true, it measures how unlikely to obbserve the current data given H0 is true.
+
+## Takeaway
+Statistical inference has every part concrete with visual meanings. A bootstrap confidence interval is only the middle 95% of the distribution by resampling a singke sample. A wider resampling means a wider interval and a larger sample size means a narrower interval. The confidence interval is the property of statistic procedure, not the single interval, repeated samples put about 95% of 95% intervals aroud the true value. P-value and the rejection region is determined by the shape of null hypothesis. Small p-value means our data is at the tail that makes us doubt the null hypothesis. The most important is, the interval width and p-value size are sampling variability, not the size of the effect or certainty. 
