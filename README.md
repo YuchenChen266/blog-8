@@ -5,6 +5,7 @@ This repository contains Blog Post 8, "Simulate It: Bootstrap CIs and p-Values W
 Files 
 
 blog8.Rmd — the source file of the blog post. It contains the full text and all R code; rendering it with R Markdown reproduces the complete post and all figures programmatically.
+
 blog8.html — the rendered blog post. It contains the full text, all R code, all figures, and one interactive Plotly visualization. Open it with any web browser .
 
 Contents of the post 
